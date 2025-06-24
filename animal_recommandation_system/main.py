@@ -543,3 +543,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    system = AnimalRecommendationSystem("/Users/sxxwings/git/pimfy/Recommendation/data/pimfyvirus_dog_data.csv")  # 파일명은 실제 CSV 이름으로!
+    system.run_interactive_mode()
