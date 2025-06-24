@@ -66,7 +66,7 @@ http://localhost:8501
 
 ### 📌 주의 사항
 
-* `data/animals.csv` 파일이 존재해야 앱이 실행됩니다.
+* `data/pimfyvirus_dog_data` 파일이 존재해야 앱이 실행됩니다.
 * 경로가 다르면 `streamlit_app.py`에서 직접 경로를 수정하세요:
 
 ```python
