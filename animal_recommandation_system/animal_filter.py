@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Union, Tuple
 import re
-## 유기견 정보 필터링  
+
 
 class AnimalFilter:
     """임시보호 동물 필터링 클래스"""
