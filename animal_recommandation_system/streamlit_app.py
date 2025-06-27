@@ -7,7 +7,7 @@ from animal_filter import AnimalFilter
 st.set_page_config(page_title="임시보호 동물 추천 시스템", layout="wide")
 
 # ✅ CSV 경로 직접 지정
-CSV_PATH = "/Users/sxxwings/git/pimfy/Recommendation/data/pimfyvirus_dog_data.csv"
+CSV_PATH = "C:/Users/keti/git/Recommendation/data/pimfyvirus_dog_data.csv"
 
 # ✅ 데이터 로딩
 preprocessor = DataPreprocessor()
