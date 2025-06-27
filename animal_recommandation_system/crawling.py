@@ -274,3 +274,30 @@ print(df)
 # CSV 파일로 저장 
 df.to_csv("pimfyvirus_dog_data.csv", index=False, encoding="utf-8-sig")
 print("\n데이터가 'pimfyvirus_dog_data.csv' 파일로 저장되었습니다.")
+
+## -------- 로그 데이터 ------------------
+import csv
+from datetime import datetime
+
+log_file = "pimfyvirus_log.csv"
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# 수집된 모든 동물 이름 리스트 추출
+animal_names = [item.get("이름", "N/A") for item in all_data]
+animal_names_str = ", ".join(animal_names) if animal_names else "N/A"
+
+# 파일 존재 여부 확인
+file_exists = False
+try:
+    with open(log_file, "r", encoding="utf-8") as f:
+        file_exists = True
+except FileNotFoundError:
+    pass
+
+# CSV에 기록
+with open(log_file, "a", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f)
+    if not file_exists:
+        writer.writerow(["timestamp", "collected_count", "animal_names"])
+    writer.writerow([now, len(all_data), animal_names_str])
+print("\n로그 데이터가 'pimfyvirus_log.csv' 파일로 저장되었습니다.")
