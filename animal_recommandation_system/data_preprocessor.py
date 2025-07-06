@@ -1,375 +1,305 @@
-"""
-임시보호 동물 데이터 전처리 모듈
-CSV 데이터를 정제하고 필터링을 위한 구조화된 형태로 변환
-"""
-
 import pandas as pd
 import numpy as np
 import re
-from datetime import datetime
-from typing import Dict, List, Optional, Union
+import pickle
 import warnings
 warnings.filterwarnings('ignore')
 
-
-class DataPreprocessor:
-    """임시보호 동물 데이터 전처리 클래스"""
-    
+class AnimalDataProcessorForGPT:
     def __init__(self):
-        self.raw_data = None
-        self.processed_data = None
-        self.metadata = {}
+        self.processed_df = None
+        
+    def load_data(self, file_path):
+        """CSV 파일 로드"""
+        print("📂 데이터 로딩 중...")
+        df = pd.read_csv(file_path)
+        print(f"✅ 데이터 로딩 완료: {len(df)}개 레코드, {len(df.columns)}개 컬럼")
+        return df
     
-    def load_and_process(self, csv_path: str) -> pd.DataFrame:
-        """
-        CSV 파일을 로드하고 기본 전처리 수행
+    def basic_cleaning(self, df):
+        """기본적인 데이터 정리 (GPT 임베딩용)"""
+        print("\n🔧 기본 데이터 정리 중...")
         
-        Args:
-            csv_path: CSV 파일 경로
-            
-        Returns:
-            전처리된 데이터프레임
-        """
-        # CSV 파일 로드
-        self.raw_data = pd.read_csv(csv_path, encoding='utf-8')
-        print(f"총 {len(self.raw_data)}개의 동물 데이터 로드됨")
+        df_clean = df.copy()
         
-        # 데이터 전처리 수행
-        self.processed_data = self._process_all_data()
+        # 몸무게 데이터 타입 정리만 수행 (이상치 수정 X)
+        def clean_weight(weight):
+            try:
+                weight_float = float(weight)
+                # 음수나 0은 무효 처리
+                if weight_float <= 0:
+                    return np.nan
+                return weight_float
+            except:
+                return np.nan
         
-        # 메타데이터 생성
-        self._generate_metadata()
+        df_clean['addinfo07'] = df_clean['addinfo07'].apply(clean_weight)
         
-        print(f"전처리 완료: {len(self.processed_data)}개의 데이터 처리됨")
-        return self.processed_data
+        # 이상치 현황만 보고
+        outliers = df_clean[df_clean['addinfo07'] > 100]
+        print(f"   - 100kg 이상 몸무게: {len(outliers)}개 (원본 유지)")
+        
+        # 음수나 0 몸무게 처리
+        negative_weights = (df['addinfo07'].astype(str).str.contains('-', na=False)).sum()
+        print(f"   - 비정상 몸무게 {negative_weights}개 제거")
+        
+        return df_clean
     
-    def _process_all_data(self) -> pd.DataFrame:
-        """모든 데이터에 대해 전처리 수행"""
-        processed_list = []
+    def handle_missing_values(self, df):
+        """결측값 처리 (GPT가 이해할 수 있는 형태로)"""
+        print("\n🔄 결측값 처리 중...")
         
-        for idx, row in self.raw_data.iterrows():
-            processed_animal = self._process_animal_data(row)
-            processed_list.append(processed_animal)
+        df_clean = df.copy()
         
-        return pd.DataFrame(processed_list)
-    
-    def _process_animal_data(self, animal: pd.Series) -> Dict:
-        """개별 동물 데이터 전처리"""
-        return {
-            # 기본 정보
-            'id': self._extract_id(animal.get('상세링크', '')),
-            'name': str(animal.get('이름', '')).strip(),
-            'status': str(animal.get('현 상황', '')).strip(),
-            'care_type': str(animal.get('임보종류', '')).strip(),
-            'rescue_location': str(animal.get('구조 지역', '')).strip(),
-            
-            # 동물 기본 특성
-            'gender': self._normalize_gender(animal.get('성별')),
-            'neutered': self._normalize_neutered(animal.get('중성화 여부')),
-            'birth_year': self._extract_birth_year(animal.get('출생시기')),
-            'weight': self._extract_weight(animal.get('몸무게')),
-            'age': self._calculate_age(animal.get('출생시기')),
-            
-            # 해시태그 처리
-            'hashtags': self._process_hashtags(animal.get('해시태그')),
-            
-            # 임보 조건
-            'care_conditions': {
-                'region': str(animal.get('임보조건_지역', '')).strip(),
-                'duration': self._process_duration(animal.get('임보조건_임보 기간')),
-                'pickup': str(animal.get('임보조건_픽업', '')).strip(),
-                'additional_conditions': animal.get('임보조건_기타 조건'),
-                'suitable_homes': self._process_suitable_homes(animal.get('이런_집도_가능해요'))
-            },
-            
-            # 건강 정보
-            'health_info': {
-                'vaccination': self._process_vaccination(animal.get('건강정보_접종 현황')),
-                'examination': animal.get('건강정보_검사 현황'),
-                'medical_history': animal.get('건강정보_병력 사항'),
-                'additional_notes': animal.get('건강정보_기타 사항')
-            },
-            
-            # 행동 특성 (1-5 스케일)
-            'behavior_traits': {
-                'toilet_training': self._safe_int_convert(animal.get('참고용정보_배변')),
-                'walking_needs': self._safe_int_convert(animal.get('참고용정보_산책')),
-                'barking': self._safe_int_convert(animal.get('참고용정보_짖음')),
-                'separation_anxiety': self._safe_int_convert(animal.get('참고용정보_분리불안')),
-                'shedding': self._safe_int_convert(animal.get('참고용정보_털빠짐')),
-                'affection': self._safe_int_convert(animal.get('참고용정보_스킨십')),
-                'human_friendly': self._safe_int_convert(animal.get('참고용정보_대인')),
-                'dog_friendly': self._safe_int_convert(animal.get('참고용정보_대견')),
-                'solo_living': self._safe_int_convert(animal.get('참고용정보_외동')),
-                'cat_friendly': self._safe_int_convert(animal.get('참고용정보_대묘'))
-            },
-            
-            # 기타 정보
-            'support_provided': str(animal.get('책임자_제공_사항', '')).strip(),
-            'detail_link': str(animal.get('상세링크', '')).strip(),
-            'sns_link': animal.get('SNS'),
-            'announcement_number': str(animal.get('공고번호', '')).strip()
+        # GPT가 이해할 수 있는 기본값으로 설정
+        missing_fields = {
+            'addinfo01': '이름미정',           # 동물 이름
+            'addinfo02': '구조위치미정',       # 구조 위치
+            'addinfo03': '성별미정',           # 성별
+            'addinfo04': '중성화여부미정',     # 중성화 여부
+            'addinfo05': '나이정보없음',       # 나이
+            'addinfo08': '',                   # 성격 해시태그 (빈 문자열)
+            'addinfo09': '',                   # 구조 스토리 (빈 문자열)
+            'addinfo10': '',                   # 성격 특성 (빈 문자열)
+            'addinfo11': '',                   # 추가 정보 (빈 문자열)
+            'addinfo16': '',                   # 특별 요구사항 (빈 문자열)
+            'addinfo20': '',                   # 일상 관리 정보 (빈 문자열)
+            'state': '입양상태미정',           # 입양 상태
+            'kind': '임보종류미정'             # 임보 종류
         }
-    
-    def _extract_id(self, link: str) -> Optional[str]:
-        """상세링크에서 ID 추출"""
-        if not link or pd.isna(link):
-            return None
-        match = re.search(r'/(\d+)/$', str(link))
-        return match.group(1) if match else None
-    
-    def _normalize_gender(self, gender) -> Optional[str]:
-        """성별 정규화"""
-        if pd.isna(gender):
-            return None
-        gender_str = str(gender).strip().lower()
-        if '남' in gender_str or 'male' in gender_str:
-            return 'male'
-        elif '여' in gender_str or 'female' in gender_str:
-            return 'female'
-        return 'unknown'
-    
-    def _normalize_neutered(self, neutered) -> Optional[bool]:
-        """중성화 여부 정규화"""
-        if pd.isna(neutered):
-            return None
-        neutered_str = str(neutered).strip()
-        return '완' in neutered_str or '완료' in neutered_str
-    
-    def _extract_birth_year(self, birth_info) -> Optional[int]:
-        """출생연도 추출"""
-        if pd.isna(birth_info):
-            return None
-        match = re.search(r'(\d{4})', str(birth_info))
-        return int(match.group(1)) if match else None
-    
-    def _calculate_age(self, birth_info) -> Optional[int]:
-        """나이 계산"""
-        birth_year = self._extract_birth_year(birth_info)
-        if birth_year is None:
-            return None
-        current_year = datetime.now().year
-        return current_year - birth_year
-    
-    def _extract_weight(self, weight_str) -> Optional[float]:
-        """몸무게 추출 (kg 단위로 변환)"""
-        if pd.isna(weight_str):
-            return None
-        match = re.search(r'(\d+(?:\.\d+)?)', str(weight_str))
-        return float(match.group(1)) if match else None
-    
-    def _process_hashtags(self, hashtag_str) -> List[str]:
-        """해시태그 처리"""
-        if pd.isna(hashtag_str):
-            return []
-        hashtags = str(hashtag_str).split(',')
-        return [tag.replace('#', '').strip() for tag in hashtags if tag.strip()]
-    
-    def _process_duration(self, duration_str) -> Optional[int]:
-        """임보 기간 처리"""
-        if pd.isna(duration_str):
-            return None
-        match = re.search(r'(\d+)', str(duration_str))
-        return int(match.group(1)) if match else None
-    
-    def _process_suitable_homes(self, homes_str) -> List[str]:
-        """적합한 가정 유형 처리"""
-        if pd.isna(homes_str):
-            return []
-        homes = str(homes_str).split(',')
-        return [home.strip() for home in homes if home.strip()]
-    
-    def _process_vaccination(self, vaccination_str) -> Optional[List[Dict]]:
-        """예방접종 정보 처리"""
-        if pd.isna(vaccination_str):
-            return None
         
-        vaccinations = []
-        lines = str(vaccination_str).split('\n')
+        for field, default_value in missing_fields.items():
+            if field in df_clean.columns:
+                missing_count = df_clean[field].isna().sum()
+                df_clean[field] = df_clean[field].fillna(default_value)
+                if missing_count > 0:
+                    print(f"   - {field}: {missing_count}개 결측값 → '{default_value}'")
         
-        for line in lines:
-            match = re.search(r'(\d+)차접종.*?(\d{2}\.\d{2}\.\d{2})', line)
-            if match:
-                vaccinations.append({
-                    'round': int(match.group(1)),
-                    'date': match.group(2)
-                })
+        # 몸무게 결측값은 그대로 유지 (자연어로 처리)
+        weight_missing = df_clean['addinfo07'].isna().sum()
+        if weight_missing > 0:
+            print(f"   - 몸무게 결측값 {weight_missing}개 (자연어 텍스트에서 '몸무게 정보 없음'으로 처리 예정)")
         
-        return vaccinations if vaccinations else None
+        return df_clean
     
-    def _safe_int_convert(self, value) -> Optional[int]:
-        """안전한 정수 변환"""
-        if pd.isna(value):
-            return None
+    def create_size_category(self, weight):
+        """몸무게를 자연어 크기 표현으로 변환"""
+        if pd.isna(weight):
+            return "몸무게 정보 없음"
+        
         try:
-            return int(float(value))
-        except (ValueError, TypeError):
-            return None
+            weight = float(weight)
+            if weight < 7:
+                return "소형 (7kg 미만)"
+            elif weight < 20:
+                return "중형 (7-20kg)"
+            else:
+                return "대형 (20kg 이상)"
+        except:
+            return "몸무게 정보 없음"
     
-    def _generate_metadata(self):
-        """메타데이터 생성 (필터링에 사용될 고유값들)"""
-        if self.processed_data is None:
-            return
+    def create_age_description(self, age_info):
+        """나이 정보를 자연어로 변환"""
+        if pd.isna(age_info) or age_info == '나이정보없음':
+            return "나이 정보 없음"
         
-        self.metadata = {
-            'regions': self.processed_data['rescue_location'].dropna().unique().tolist(),
-            'genders': self.processed_data['gender'].dropna().unique().tolist(),
-            'care_types': self.processed_data['care_type'].dropna().unique().tolist(),
-            'age_ranges': self._get_age_ranges(),
-            'weight_ranges': self._get_weight_ranges(),
-            'all_hashtags': self._get_all_hashtags(),
-            'suitable_home_types': self._get_all_suitable_home_types()
-        }
+        age_str = str(age_info).lower()
+        
+        # 연도 기반 분류
+        if any(year in age_str for year in ['2024', '2023']):
+            return "어린 동물 (1-2세 추정)"
+        elif any(year in age_str for year in ['2022', '2021', '2020']):
+            return "젊은 성체 (3-5세 추정)"
+        elif any(year in age_str for year in ['2019', '2018', '2017']):
+            return "중년 동물 (6-8세 추정)"
+        elif any(year in age_str for year in ['2016', '2015', '2014', '2013']):
+            return "고령 동물 (9세 이상 추정)"
+        else:
+            return f"나이 관련 정보: {age_info}"
     
-    def _get_age_ranges(self) -> List[Dict]:
-        """나이 범위 생성"""
-        ages = self.processed_data['age'].dropna()
-        if ages.empty:
-            return []
+    def clean_text_for_gpt(self, text):
+        """GPT가 이해하기 쉽도록 텍스트 정리"""
+        if pd.isna(text) or text == '':
+            return ''
         
-        return [
-            {'label': '1세 미만', 'min': 0, 'max': 0},
-            {'label': '1-3세', 'min': 1, 'max': 3},
-            {'label': '4-7세', 'min': 4, 'max': 7},
-            {'label': '8세 이상', 'min': 8, 'max': 100}
-        ]
+        text = str(text)
+        
+        # 1. 해시태그를 자연어로 변환 (#애교쟁이 → 애교쟁이)
+        # GPT가 해시태그도 충분히 이해하므로 단순 변환만
+        text = re.sub(r'#([가-힣a-zA-Z0-9]+)', r'\1', text)
+        
+        # 2. 기본적인 정리만 수행
+        text = re.sub(r'&apos;', "'", text)  # HTML 엔티티
+        text = re.sub(r'\r\n', ' ', text)    # 줄바꿈을 공백으로
+        text = re.sub(r'\n', ' ', text)      # 줄바꿈을 공백으로
+        text = re.sub(r'\s+', ' ', text)     # 연속 공백 제거
+        
+        return text.strip()
     
-    def _get_weight_ranges(self) -> List[Dict]:
-        """몸무게 범위 생성"""
-        weights = self.processed_data['weight'].dropna()
-        if weights.empty:
-            return []
+    def create_comprehensive_description(self, row):
+        """각 동물의 종합적인 자연어 설명 생성"""
         
-        return [
-            {'label': '소형견 (5kg 미만)', 'min': 0, 'max': 4.9},
-            {'label': '중형견 (5-15kg)', 'min': 5, 'max': 15},
-            {'label': '대형견 (15kg 이상)', 'min': 15.1, 'max': 100}
-        ]
+        # 기본 정보 수집
+        name = row.get('addinfo01', '이름미정')
+        gender = row.get('addinfo03', '성별미정')
+        weight = row.get('addinfo07')
+        age_info = row.get('addinfo05', '나이정보없음')
+        neuter = row.get('addinfo04', '중성화여부미정')
+        state = row.get('state', '입양상태미정')
+        kind = row.get('kind', '임보종류미정')
+        
+        # 크기와 나이 설명 생성
+        size_desc = self.create_size_category(weight)
+        age_desc = self.create_age_description(age_info)
+        
+        # 텍스트 필드들 정리
+        personality_tags = self.clean_text_for_gpt(row.get('addinfo08', ''))
+        rescue_story = self.clean_text_for_gpt(row.get('addinfo09', ''))
+        personality_desc = self.clean_text_for_gpt(row.get('addinfo10', ''))
+        additional_info = self.clean_text_for_gpt(row.get('addinfo11', ''))
+        special_needs = self.clean_text_for_gpt(row.get('addinfo16', ''))
+        daily_care = self.clean_text_for_gpt(row.get('addinfo20', ''))
+        health_info = self.clean_text_for_gpt(row.get('addinfo19', ''))
+        
+        # 자연어 설명 구성
+        description_parts = []
+        
+        # 1. 기본 소개
+        intro = f"{name}는 {gender}이며, {size_desc}에 해당합니다."
+        if age_desc != "나이 정보 없음":
+            intro += f" {age_desc}이고"
+        if neuter and neuter != '중성화여부미정':
+            intro += f" {neuter} 상태입니다."
+        else:
+            intro += "입니다."
+        description_parts.append(intro)
+        
+        # 2. 현재 상태
+        if state != '입양상태미정' or kind != '임보종류미정':
+            status = f"현재 {state} 상태이며 {kind}로 분류됩니다."
+            description_parts.append(status)
+        
+        # 3. 성격 특징
+        if personality_tags:
+            description_parts.append(personality_tags)
+        
+        # 4. 성격 상세 설명
+        if personality_desc:
+            description_parts.append(f"성격 상세: {personality_desc}")
+        
+        # 5. 구조 배경
+        if rescue_story:
+            description_parts.append(f"구조 배경: {rescue_story}")
+        
+        # 6. 건강 정보
+        if health_info:
+            description_parts.append(f"건강 상태: {health_info}")
+        
+        # 7. 특별 요구사항
+        if special_needs:
+            description_parts.append(f"특별 요구사항: {special_needs}")
+        
+        # 8. 일상 관리
+        if daily_care:
+            description_parts.append(f"일상 관리: {daily_care}")
+        
+        # 9. 추가 정보
+        if additional_info:
+            description_parts.append(f"추가 정보: {additional_info}")
+        
+        # 최종 설명 결합
+        final_description = ' '.join(description_parts)
+        
+        return final_description
     
-    def _get_all_hashtags(self) -> List[str]:
-        """모든 해시태그 수집"""
-        all_tags = []
-        for hashtags in self.processed_data['hashtags']:
-            all_tags.extend(hashtags)
-        return list(set(all_tags))
-    
-    def _get_all_suitable_home_types(self) -> List[str]:
-        """모든 적합한 가정 유형 수집"""
-        all_types = []
-        for care_conditions in self.processed_data['care_conditions']:
-            all_types.extend(care_conditions['suitable_homes'])
-        return list(set(all_types))
-    
-    def get_processed_data(self) -> pd.DataFrame:
-        """처리된 데이터 반환"""
-        return self.processed_data
-    
-    def get_metadata(self) -> Dict:
-        """메타데이터 반환"""
-        return self.metadata
-    
-    def get_statistics(self) -> Dict:
-        """데이터 통계 반환"""
-        if self.processed_data is None:
-            return None
+    def process_for_gpt_embedding(self, file_path):
+        """GPT 임베딩을 위한 전체 전처리 파이프라인"""
+        print("🤖 GPT 임베딩용 데이터 전처리 시작")
+        print("=" * 50)
         
-        total_animals = len(self.processed_data)
-        available_animals = len(self.processed_data[self.processed_data['status'] == '임보가능'])
+        # 1. 데이터 로딩
+        df = self.load_data(file_path)
         
-        # 성별 분포
-        gender_dist = self.processed_data['gender'].value_counts().to_dict()
+        # 2. 기본 정리
+        df = self.basic_cleaning(df)
         
-        # 임보 종류 분포
-        care_type_dist = self.processed_data['care_type'].value_counts().to_dict()
+        # 3. 결측값 처리
+        df = self.handle_missing_values(df)
         
-        # 지역 분포 (상위 10개)
-        region_dist = self.processed_data['rescue_location'].value_counts().head(10).to_dict()
+        # 4. 자연어 설명 생성
+        print("\n📝 자연어 설명 생성 중...")
+        descriptions = []
         
-        # 평균 나이 및 몸무게
-        avg_age = self.processed_data['age'].mean()
-        avg_weight = self.processed_data['weight'].mean()
-        
-        return {
-            'total': total_animals,
-            'available': available_animals,
-            'gender_distribution': gender_dist,
-            'care_type_distribution': care_type_dist,
-            'region_distribution': region_dist,
-            'average_age': round(avg_age, 1) if not pd.isna(avg_age) else None,
-            'average_weight': round(avg_weight, 1) if not pd.isna(avg_weight) else None
-        }
-    
-    def save_processed_data(self, output_path: str):
-        """전처리된 데이터를 파일로 저장"""
-        if self.processed_data is not None:
-            # DataFrame으로 변환하여 저장하기 위해 복잡한 구조를 평탄화
-            flattened_data = []
+        for idx, row in df.iterrows():
+            description = self.create_comprehensive_description(row)
+            descriptions.append(description)
             
-            for _, row in self.processed_data.iterrows():
-                flat_row = {
-                    'id': row['id'],
-                    'name': row['name'],
-                    'status': row['status'],
-                    'care_type': row['care_type'],
-                    'rescue_location': row['rescue_location'],
-                    'gender': row['gender'],
-                    'neutered': row['neutered'],
-                    'birth_year': row['birth_year'],
-                    'weight': row['weight'],
-                    'age': row['age'],
-                    'hashtags': '|'.join(row['hashtags']) if row['hashtags'] else '',
-                    
-                    # 임보 조건
-                    'care_region': row['care_conditions']['region'],
-                    'care_duration': row['care_conditions']['duration'],
-                    'care_pickup': row['care_conditions']['pickup'],
-                    'care_additional_conditions': row['care_conditions']['additional_conditions'],
-                    'suitable_homes': '|'.join(row['care_conditions']['suitable_homes']) if row['care_conditions']['suitable_homes'] else '',
-                    
-                    # 건강 정보
-                    'vaccination_count': len(row['health_info']['vaccination']) if row['health_info']['vaccination'] else 0,
-                    'medical_history': row['health_info']['medical_history'],
-                    
-                    # 행동 특성
-                    'toilet_training': row['behavior_traits']['toilet_training'],
-                    'walking_needs': row['behavior_traits']['walking_needs'],
-                    'barking': row['behavior_traits']['barking'],
-                    'separation_anxiety': row['behavior_traits']['separation_anxiety'],
-                    'shedding': row['behavior_traits']['shedding'],
-                    'affection': row['behavior_traits']['affection'],
-                    'human_friendly': row['behavior_traits']['human_friendly'],
-                    'dog_friendly': row['behavior_traits']['dog_friendly'],
-                    'solo_living': row['behavior_traits']['solo_living'],
-                    'cat_friendly': row['behavior_traits']['cat_friendly'],
-                    
-                    'detail_link': row['detail_link']
-                }
-                flattened_data.append(flat_row)
+            # 진행률 표시
+            if (idx + 1) % 500 == 0:
+                print(f"   진행률: {idx + 1}/{len(df)} ({((idx + 1)/len(df)*100):.1f}%)")
+        
+        # 5. 설명 텍스트를 데이터프레임에 추가
+        df['gpt_description'] = descriptions
+        
+        # 처리된 데이터 저장
+        self.processed_df = df
+        
+        print(f"\n✅ GPT 임베딩용 전처리 완료!")
+        print(f"   - 최종 데이터 크기: {len(df)}개")
+        
+        # 텍스트 길이 통계
+        desc_lengths = [len(desc) for desc in descriptions]
+        print(f"   - 평균 설명 길이: {np.mean(desc_lengths):.0f}자")
+        print(f"   - 최대 설명 길이: {max(desc_lengths)}자")
+        print(f"   - 최소 설명 길이: {min(desc_lengths)}자")
+        
+        return df, descriptions
+    
+    def save_processed_data(self, output_path="gpt_preprocessed_data.pkl"):
+        """전처리된 데이터 저장"""
+        print(f"\n💾 전처리된 데이터 저장 중: {output_path}")
+        
+        processed_data = {
+            'dataframe': self.processed_df,
+            'descriptions': self.processed_df['gpt_description'].tolist(),
+            'metadata': {
+                'total_records': len(self.processed_df),
+                'preprocessing_type': 'GPT_embedding_optimized',
+                'columns': list(self.processed_df.columns)
+            }
+        }
+        
+        with open(output_path, 'wb') as f:
+            pickle.dump(processed_data, f)
+        
+        print(f"✅ 저장 완료: {output_path}")
+    
+    def sample_results(self, n=3):
+        """처리 결과 샘플 확인"""
+        print(f"\n🔍 GPT 전처리 결과 샘플 ({n}개)")
+        print("-" * 80)
+        
+        for i in range(min(n, len(self.processed_df))):
+            row = self.processed_df.iloc[i]
             
-            pd.DataFrame(flattened_data).to_csv(output_path, index=False, encoding='utf-8')
-            print(f"전처리된 데이터가 {output_path}에 저장되었습니다.")
-
+            print(f"\n【동물 {i+1}: {row['addinfo01']}】")
+            print(f"생성된 자연어 설명:")
+            print(f"   {row['gpt_description'][:300]}...")
+            print(f"   (총 {len(row['gpt_description'])}자)")
 
 # 사용 예시
 if __name__ == "__main__":
-    # 데이터 전처리기 초기화
-    preprocessor = DataPreprocessor()
+    # GPT용 전처리 객체 생성
+    gpt_processor = AnimalDataProcessorForGPT()
     
-    # 데이터 로드 및 전처리
-    processed_data = preprocessor.load_and_process('pimfyvirus_dog_data.csv')
+    # 전체 파이프라인 실행
+    df, descriptions = gpt_processor.process_for_gpt_embedding('homeprotection_data.csv')
     
-    # 통계 정보 출력
-    stats = preprocessor.get_statistics()
-    print("\n=== 데이터 통계 ===")
-    print(f"전체 동물 수: {stats['total']}")
-    print(f"임보 가능한 동물 수: {stats['available']}")
-    print(f"평균 나이: {stats['average_age']}세")
-    print(f"평균 몸무게: {stats['average_weight']}kg")
-    
-    # 메타데이터 출력
-    metadata = preprocessor.get_metadata()
-    print(f"\n총 해시태그 종류: {len(metadata['all_hashtags'])}")
-    print(f"구조 지역 수: {len(metadata['regions'])}")
+    # 결과 샘플 확인
+    gpt_processor.sample_results(3)
     
     # 전처리된 데이터 저장
-    preprocessor.save_processed_data('processed_animal_data.csv')
+    gpt_processor.save_processed_data()
+    
+    print("\n🎯 다음 단계: GPT 임베딩 생성")
+    print("   → GPTEmbeddingProcessor로 임베딩 벡터 생성")
